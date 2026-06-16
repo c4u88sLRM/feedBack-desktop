@@ -1,0 +1,22 @@
+name: Ship CI
+
+# PRs into both main and release/** run CI through this wrapper so the check
+# run is named "CI / check" (reusable-workflow caller prefix from the `CI`
+# job), matching the org rulesets' required context. ci.yml itself only
+# triggers via workflow_call — it never runs standalone, which would emit an
+# unprefixed "check" the rulesets can't match.
+on:
+  pull_request:
+    branches: [main, 'release/**']
+  workflow_dispatch:
+
+concurrency:
+  group: ship-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  CI:
+    uses: ./.github/workflows/ci.yml

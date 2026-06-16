@@ -1,0 +1,39 @@
+# macOS Homebrew packages for building Slopsmith Desktop.
+# Kept in sync with .github/workflows/build.yml — change both places together.
+
+# Build tools
+cmake
+pkg-config
+
+# Media tools
+#
+# ffmpeg is installed for its *dylibs* (libavformat / libavcodec /
+# libswresample / libavutil) — vgmstream-cli is linked against
+# /opt/homebrew/opt/ffmpeg/lib/lib*.dylib, and dylibbundler hangs in a
+# stdin-EOF prompt loop on CI if those files don't exist at bundle
+# time. We do NOT bundle brew's ffmpeg *binary*: Homebrew's stock
+# formula (8.1.1+) no longer ships --enable-libvorbis (sloppak's
+# encoder of choice), so build-macos.sh overwrites resources/bin/ffmpeg
+# with a static build from osxexperts.net (arm64) / evermeet.cx (x86_64)
+# instead. See `.external.ffmpeg_macos_*` in `.build-config.json`.
+ffmpeg
+
+# MIDI → audio renderer used by GP5 import (`gp2midi.py`).
+# Homebrew calls the formula `fluid-synth` (with a hyphen); the binary
+# it installs is still named `fluidsynth`.
+fluid-synth
+
+# Audio codec library required by vgmstream-cli
+speex
+
+# vgmstream-cli decodes WEM audio. build-macos.sh copies the
+# Homebrew-installed binary (`command -v vgmstream-cli`) so it matches the
+# build host's architecture — on the macos-14 CI runner that's arm64; on an
+# Intel host it's x86_64. (Previously a prebuilt vgmstream-mac.zip was
+# downloaded, which handed Intel hosts an arm64 binary → "Bad CPU type".)
+vgmstream
+
+# Used by the CI / local build to rewrite Mach-O load paths on the
+# bundled fluidsynth and vgmstream-cli binaries so they load their
+# dylibs via @executable_path instead of /opt/homebrew/lib.
+dylibbundler

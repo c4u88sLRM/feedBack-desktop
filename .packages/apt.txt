@@ -1,0 +1,53 @@
+# Ubuntu/Debian packages for building Slopsmith Desktop.
+# Kept in sync with .github/workflows/build.yml — change both places together.
+
+# Audio libraries
+libasound2-dev
+libjack-jackd2-dev
+
+# Graphics/X11 libraries (required by JUCE)
+# fontconfig is a hard requirement of juce_graphics (declared linuxPackages:
+# "freetype2 fontconfig"), pulled in once slopsmith-vst-host — which links
+# juce_gui_basics/juce_graphics — builds on Linux. Without it CMake configure
+# fails at pkg_check_modules(freetype2 fontconfig) on a clean machine.
+libfreetype-dev
+libfontconfig1-dev
+libx11-dev
+libxrandr-dev
+libxcursor-dev
+libxinerama-dev
+libxext-dev
+
+# Web/WebKit (required by Electron webview)
+libcurl4-openssl-dev
+libwebkit2gtk-4.1-dev
+
+# Build tools
+pkg-config
+cmake
+build-essential
+# GCC 12+ for the NAM A2 (slimmable) sources, which use
+# std::atomic<std::shared_ptr<...>> — a C++20 library feature libstdc++ only
+# implements from GCC 12. ubuntu-22.04's default (build-essential) g++ is 11;
+# build-audio.sh selects g++-12 when the default is older.
+g++-12
+
+# File operations (used by bundle-slopsmith.sh to resolve symlinked plugins)
+rsync
+
+# Binary patching (used by bundle-binaries.sh to point bundled fluidsynth
+# at sibling shared libraries at runtime)
+patchelf
+
+# MIDI → audio renderer used by GP5 import (`gp2midi.py`). `fluidsynth`
+# here is the CLI; bundle-binaries.sh copies its full dylib chain.
+fluidsynth
+
+# Media tools (for audio processing)
+ffmpeg
+
+# Version control
+git
+
+# Archive utilities (required by electron-builder)
+xz-utils

@@ -1,0 +1,446 @@
+# Slopsmith plugin-sandbox — IPC + lifecycle design
+
+Date: 2026-05-13
+Companion to: `docs/VST-SANDBOX-DIAG.md`
+Status: Windows v1 shipped; POSIX (macOS/Linux) IPC foundation + runtime +
+editor wired and active (§11) — VST3 plugins route through the sandbox on all
+three desktop platforms, editor included. The sandbox-child editor is a floating
+top-level window on every platform (HWND / NSWindow + foreground activation
+policy / X11 via JUCE 8's VST3 IRunLoop hosting). True parent-window embedding
+(CARemoteLayer on macOS, XEmbed on Linux) remains out of scope.
+
+## 1. Topology
+
+```text
+┌────────────────────────────────────┐         ┌──────────────────────────────┐
+│ Slopsmith Desktop (Electron main)  │         │  slopsmith-vst-host.exe      │
+│                                    │         │  (one per sandboxed plugin)  │
+│  Node main process                 │         │                              │
+│  └── slopsmith_audio.node          │         │  WinMain → main thread       │
+│      └── SignalChain               │         │  └── JUCE MessageManager     │
+│          └── SandboxedProcessor ◀┐ │         │      └── one AudioPlugin     │
+│              ▲                   │  │         │          └── editor (HWND)  │
+│              │                   │  │         │                              │
+│              │ control:          │  │  pipe   │                              │
+│              │ JSON over named   ├──┼─────────┤                              │
+│              │ pipe (req/resp +  │  │         │                              │
+│              │ events)           │  │         │                              │
+│              │                   │  │         │                              │
+│              │ audio: shared     │  │  shm    │                              │
+│              │ memory ring +     ├──┼─────────┤                              │
+│              │ Win32 events      │  │         │                              │
+└────────────────────────────────────┘         └──────────────────────────────┘
+```
+
+One sandbox process per sandboxed plugin (simplest; matches the PoC). Pooling is a v2
+optimisation, not v1.
+
+In-process loading remains the default. A plugin only goes through the sandbox if it
+matches a denylist (see §5).
+
+## 2. Process spawn + handshake
+
+```text
+slopsmith-vst-host.exe
+    --plugin-path "<absolute vst3 path>"
+    --control-pipe "\\.\pipe\slopsmith-vst-<uuid>"
+    --audio-shm    "Local\slopsmith-vst-<uuid>-audio"
+    --audio-event-in  "Local\slopsmith-vst-<uuid>-evt-in"
+    --audio-event-out "Local\slopsmith-vst-<uuid>-evt-out"
+    --sample-rate 48000 --max-block 1024 --channels 2
+```
+
+Spawned via `CreateProcess`. The main process creates the pipe + shm + events first,
+then spawns; the sandbox connects on startup. Watchdog: if no `ready` event arrives
+within `kReadyTimeoutMs` (30 s — long enough for Qt-using plugins like GR6 to
+spin up their QML engine on a cold cache), kill and report failure.
+
+`<uuid>` is a v4 UUID generated per spawn so multiple sandboxes coexist cleanly.
+
+## 3. Control channel — named pipe
+
+Transport: `PIPE_TYPE_BYTE | PIPE_READMODE_BYTE`, bidirectional, overlapped I/O,
+with an explicit `[u32 length-LE][body]` framing layer the channel applies on
+top. (Message-mode was the original plan, but the sandbox's first `ready` frame
+wasn't being delivered to the host I/O thread reliably; byte mode + length
+prefixes is what shipped — see commit `2cb9ae9`.)
+
+Framing per message: `[u32 length-LE] [json body]`. JSON is small and human-readable
+for logging; the audio fast path is *not* on this channel.
+
+Every request from main→sandbox carries a `requestId`. The sandbox echoes it on the
+matching reply. Events the sandbox originates (parameter automation, log lines)
+carry `requestId: null`.
+
+### Main → sandbox
+
+| `op` | Status | Payload | Reply |
+|---|---|---|---|
+| `prepare` | v1 | `{ sampleRate, blockSize }` | `{ ok, latencySamples, numInputs, numOutputs }` |
+| `setBlockSize` | v2 | `{ blockSize }` | `{ ok }` — pause-guarded against the audio worker |
+| `setParameter` | v1 | `{ index, value }` | `{ ok }` (omit reply if `fireAndForget: true`) |
+| `getState` | v1 | `{}` | `{ stateBase64 }` — pause-guarded |
+| `setState` | v1 | `{ stateBase64 }` | `{ ok }` — pause-guarded |
+| `midiEvent` | removed v2 | (n/a) | MIDI now flows inline in the audio shm; sandbox keeps a deprecation-warning no-op handler for one release |
+| `openEditor` | v1 | `{}` | `{ hwnd: "0x...", w, h }` |
+| `closeEditor` | v1 | `{}` | `{ ok }` |
+| `shutdown` | v1 | `{}` | `{ ok }` then sandbox exits 0 |
+| `resizeEditor` | planned | `{ w, h }` | `{ ok }` |
+| `listParameters` | planned | `{}` | `{ params: [{index,name,defaultValue,...}] }` |
+
+Status reflects the current dispatcher in `src/vst-host/main.cpp`. "Planned"
+ops are on the PR-body follow-up checklist. Pause-guarded ops are listed in
+§4 "Audio-thread sync" below.
+
+### Sandbox → main (events, `requestId: null`)
+
+| `event` | Payload |
+|---|---|
+| `ready` | `{ pluginName, manufacturer, numParams, hasEditor, latencySamples }` (first message after pipe connect) |
+| `parameterChanged` | `{ index, value }` — plugin moved its own knobs (automation, GUI) |
+| `editorClosed` | `{ reason }` — user closed window via X, or plugin self-closed |
+| `log` | `{ level, message }` — surface plugin stderr / JUCE asserts |
+| `error` | `{ code, message }` — non-fatal recoverable error |
+| `goodbye` | `{}` — last message before clean exit |
+
+A broken pipe with no `goodbye` means the sandbox crashed.
+
+## 4. Audio channel — shared memory + events
+
+Audio is too latency-sensitive for JSON-on-pipes. One block at 48 k / 256 samples is
+5.33 ms; we want round-trip overhead well under 1 ms.
+
+Layout in `audio-shm` (single mapping):
+
+```text
+offset           size                                 contents
+0                sizeof(Header)                       Header (indices, offsets, counters)
+inputRingOffset  maxBlocks × maxBlockSamples × maxCh × 4 B   Ring A (host → sandbox, input audio)
+outputRingOffset maxBlocks × maxBlockSamples × maxCh × 4 B   Ring B (sandbox → host, output audio)
+midiQueueOffset  maxBlocks × sizeof(MidiQueue)        One MidiQueue per input slot (host → sandbox MIDI)
+```
+
+```c
+struct Header {
+    uint32_t magic;              // kAudioShmMagic
+    uint32_t version;            // kProtocolVersion (= 3)
+    uint32_t maxBlocks;          // typically 4
+    uint32_t maxBlockSamples;    // capped at e.g. 1024
+    uint32_t maxChannels;        // 2 for stereo
+    uint32_t sampleRate;
+    // Per-direction indices — input (host→sandbox) and output (sandbox→host)
+    // each have their own writer/reader pair so the two directions advance
+    // independently without sharing state.
+    uint64_t inWriteIdx;   // host produces ring A
+    uint64_t inReadIdx;    // sandbox consumes ring A
+    uint64_t outWriteIdx;  // sandbox produces ring B
+    uint64_t outReadIdx;   // host consumes ring B
+    // diagnostic — direction-agnostic
+    uint64_t xruns;
+    uint64_t dropouts;
+    uint64_t midiOverflows;     // events dropped by pushInputBlock for being SysEx-sized or past kMidiEventsPerSlot
+    // Byte offsets into the mapping (computed at spawn time)
+    uint64_t inputRingOffset;
+    uint64_t outputRingOffset;
+    uint64_t midiQueueOffset;   // base of MidiQueue[maxBlocks]
+    uint64_t ringBytesPerSlot;
+};
+```
+
+Indices are stored as plain `uint64_t` and accessed via `std::atomic_ref<uint64_t>`
+at the call site (C++20). Don't `reinterpret_cast` to `std::atomic<uint64_t>*`
+— that's not layout-guaranteed and the shm needs to stay trivially copyable.
+
+Float32, planar (channel0 then channel1 — matches JUCE's `AudioBuffer<float>`).
+
+### Inline MIDI
+
+MIDI is bundled with the input audio block in a per-slot `MidiQueue`. The host
+fills the upcoming slot's queue immediately before pushing the audio block; the
+sandbox drains it immediately after popping the same slot, before calling
+`plugin->processBlock`. The audio thread does no control-pipe I/O.
+
+```c
+struct MidiEvent {
+    uint32_t frame;                       // sample offset within the block
+    uint32_t size;                        // 1..kMidiEventMaxBytes
+    uint8_t  bytes[kMidiEventMaxBytes];   // packed; SysEx > 4 B is dropped
+};
+struct MidiQueue {
+    uint32_t count;                       // valid events for the upcoming block
+    MidiEvent events[kMidiEventsPerSlot]; // 64 events @ ≤ 4 bytes each
+};
+```
+
+Caps in `Protocol.h`: `kMidiEventMaxBytes = 4`, `kMidiEventsPerSlot = 64`.
+Lossy-by-design: events past the cap (or larger than 4 bytes) bump the global
+`AudioShmHeader.midiOverflows` counter and are dropped. Audio-thread safety is non-negotiable;
+back-pressure on a real-time path would be the wrong trade-off. SysEx delivery,
+if a real workload ever needs it, is a v3 op carried via the control channel
+rather than the audio fast path.
+
+### Per-block protocol
+
+Host audio thread:
+```text
+1. Wait until (inWriteIdx - inReadIdx) < maxBlocks  (drop block + bump xruns if not)
+2. Copy input PCM + any MIDI to Ring A[inWriteIdx % maxBlocks]
+3. ++inWriteIdx (release)
+4. SetEvent(audio-event-in)
+5. WaitForSingleObject(audio-event-out, timeout = blockSize / sampleRate * 2)
+6. Copy Ring B[outReadIdx % maxBlocks] into output buffer
+7. ++outReadIdx (release)
+```
+
+Sandbox audio thread (or sandbox main thread's audio callback):
+```text
+1. WaitForSingleObject(audio-event-in, INFINITE)
+2. Read input from Ring A[inReadIdx % maxBlocks]
+3. processBlock(in, out) on the plugin
+4. Write output to Ring B[outWriteIdx % maxBlocks]
+5. ++inReadIdx (release); ++outWriteIdx (release); SetEvent(audio-event-out)
+```
+
+Both events are auto-reset. Worst-case added latency vs in-process: one block period
+(~5 ms at 48k/256) due to the producer-consumer hop. Acceptable for guitar processing,
+not great for live monitoring — same trade-off any sandboxed host has.
+
+### Audio-thread sync for non-realtime ops
+
+Several control ops mutate plugin or buffer state in ways that race the audio
+thread's `processBlock` call: `kPrepare` and `kSetBlockSize` change the working
+block size and re-enter the plugin's `prepareToPlay`; `kGetState` /
+`kSetState` serialise/restore plugin internals. A v1-style "just touch it from
+the control thread" implementation is a data race + buffer-overrun footgun.
+
+v2 introduces a lightweight pause/drain/resume protocol on the sandbox side:
+
+- HostState owns `audioPauseRequested` (atomic bool), `audioPausedAck`, and
+  `audioResume` (`juce::WaitableEvent`s).
+- The audio thread checks `audioPauseRequested` at the top of every loop
+  iteration. When set, it signals `audioPausedAck` and blocks on `audioResume`.
+  On resume it re-reads `blockSize` and `setSize`s its working buffer
+  (capacity is pre-allocated at the spawn-time `maxBlockSamples` cap, so the
+  resize is reallocation-free).
+- The control thread wraps each non-realtime op in an `AudioPauseGuard`:
+  set the flag, `signalSandboxWake()` to break the audio worker out of its
+  `popInputBlock` wait without waiting the full 200 ms timeout, wait for the
+  ack, perform the op, then signal resume in the guard's destructor.
+
+Pause-guarded ops (sandbox dispatcher, `src/vst-host/main.cpp`):
+`kPrepare`, `kSetBlockSize`, `kGetState`, `kSetState`. `kOpenEditor` and
+`kCloseEditor` do not need the guard — they only mutate editor pointers via
+`MessageManager::callAsync` and don't touch processor state, and JUCE's
+`AudioProcessor::editorBeingDeleted` / VST3 `IPlugView::removed` are
+contractually safe to call alongside `processBlock` (the same way every DAW
+does).
+
+## 5. Plugin selection (sandbox vs in-process)
+
+Slopsmith maintains a list of plugin signatures that need the sandbox:
+
+```jsonc
+// %APPDATA%/Slopsmith/sandbox-list.json
+{
+    "needsSandbox": [
+        { "match": "manufacturer", "value": "Native Instruments" },
+        { "match": "vst3Uid",      "value": "4E545356-24696752-..." },
+        { "match": "linksDll",     "value": "Qt5Core.dll" }
+    ]
+}
+```
+
+Resolution order on `loadVST`:
+1. If plugin matches an entry → spawn sandbox.
+2. Else → in-process (today's path).
+3. If in-process load aborts the addon (`SIGABRT`, `STATUS_STACK_BUFFER_OVERRUN`, …),
+   the watchdog promotes the plugin's UID into the list automatically, with a
+   `learned-from-crash: true` flag, so the next load is sandboxed.
+
+`linksDll` matching needs a quick prescan: open the vst3 file, walk its PE import
+table. Cached in `%LOCALAPPDATA%\Slopsmith\plugin-deps.json`.
+
+## 6. Window reparenting into Electron
+
+1. Sandbox creates its editor in its own top-level window (the PoC's `EditorWindow`)
+   — but with `WS_POPUP` style instead of an overlapped frame so it has no border.
+2. Sandbox sends `editorOpened { hwnd, w, h }` to main.
+3. Renderer asks Electron for its `BrowserWindow.getNativeWindowHandle()`. From the
+   renderer, a placeholder `<div>` in the plugin chain's UI has a known position and
+   size; the main process reads its bounds via IPC from the renderer.
+4. Main process calls
+   - `SetWindowLongPtrW(pluginHwnd, GWL_STYLE, (style | WS_CHILD) & ~WS_POPUP)`
+   - `SetParent(pluginHwnd, electronHwnd)`
+   - `SetWindowPos(pluginHwnd, NULL, placeholderX, placeholderY, w, h, SWP_NOZORDER | SWP_FRAMECHANGED)`
+5. On placeholder resize/move (renderer → main IPC), main `SetWindowPos`'s and also
+   sends `resizeEditor { w, h }` to the sandbox so the plugin re-lays out.
+6. On `closeEditor`, main `SetParent(pluginHwnd, NULL)` first (un-embeds so the
+   sandbox can DestroyWindow cleanly), then sends `closeEditor`.
+
+Edge cases:
+- DPI: the sandbox enables per-monitor DPI awareness; sandbox and Electron must agree.
+  Use `SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)`.
+- Floating mode (user preference): skip steps 3–4; just send the HWND back informatively.
+- Focus: WM_ACTIVATE inside the embedded child can confuse Electron's accelerator
+  routing — likely needs a focus-shim subclassed window between Electron and the plugin.
+
+## 7. Crash + restart
+
+States that need to survive a sandbox crash:
+- The plugin's parameter values (Slopsmith caches these as the user changes them, so
+  free)
+- The plugin's opaque state blob (Slopsmith calls `getState` after every "stable"
+  change — patch load, preset switch — and caches it)
+- The signal-chain position (already in `SignalChain`, not in the sandbox)
+
+Restart flow:
+1. Main detects broken pipe → marks slot as crashed; the SignalChain inserts a silent
+   passthrough for the slot so audio keeps flowing.
+2. UI shows "plugin crashed — retry" on the slot.
+3. On retry (auto after 1 s for the first crash; manual for subsequent), spawn a
+   fresh `slopsmith-vst-host.exe`.
+4. After `ready`, replay: `prepare` → `setState` (last cached blob) → editor reopen
+   if it was open.
+
+Crash loop detection: if same plugin crashes 3× within 60 s, stop auto-retrying and
+require a manual restart from the UI.
+
+## 8. Build / repo layout
+
+```text
+slopsmith-desktop/
+├── src/
+│   ├── audio/
+│   │   ├── NodeAddon.cpp                       (existing — selects sandbox vs in-process at LoadVST)
+│   │   ├── VSTHost.cpp                         (existing — used both in-process and inside the sandbox)
+│   │   └── Sandbox/
+│   │       ├── Protocol.{h,cpp}                (wire protocol — ops, events, encoding)
+│   │       ├── ControlChannel.{h,cpp}          (named-pipe request/response + sandbox-event dispatch)
+│   │       ├── AudioChannel.{h,cpp}            (shared-memory ring + Win32 events for the audio path)
+│   │       ├── SubprocessHandle.{h,cpp}        (sandbox process lifecycle: CreateProcessW, watcher, shutdown)
+│   │       ├── SandboxedProcessor.{h,cpp}      (juce::AudioProcessor that forwards into the sandbox)
+│   │       ├── SandboxFactory_win.cpp          (Windows: shouldSandbox() + tryLoadSandboxed())
+│   │       └── SandboxFactory_stub.cpp         (non-Windows fallback — always returns nullptr)
+│   └── vst-host/                               (sandbox subprocess)
+│       ├── main.cpp                            (WinMain + JUCE main-thread message pump)
+│       └── CMakeLists.txt                      (target: slopsmith-vst-host.exe)
+└── CMakeLists.txt                              (top-level — adds the addon + host targets)
+```
+
+`slopsmith-vst-host.exe` ships in the Electron app's `resources/` and is launched from
+`SandboxedProcessor::initialise()` via `SandboxFactory_win::resolveSandboxExe()`.
+
+## 9. Out of scope for v1
+
+- Cross-platform sandbox (macOS NSView/XPC, Linux X11-embed). v1 is Windows-only.
+- AU/LV2 sandboxing. Most LV2 plugins are well-behaved in-process; reconsider if a
+  specific plugin proves otherwise.
+- Sandbox pooling (multiple plugins per process). Worth it for memory if a user
+  loads 10+ NI plugins; not v1.
+- Sample-accurate parameter automation across the IPC boundary. v1 sends parameter
+  changes through the control channel with whatever latency that gives (~ms).
+  v2 can co-opt the audio shm to embed parameter events per-block.
+- Editor-side input redirection (keyboard for VST3 `IPlugViewContentScaleSupport`).
+  Probably mostly just works through the reparented HWND.
+
+## 10. Estimate
+
+Wall clock for a single engineer, assuming the PoC's foundations:
+
+| Piece | Effort |
+|---|---|
+| `slopsmith-vst-host.exe` skeleton (extend the PoC) | 1–2 d |
+| Control channel (pipe + JSON + 12 message types) | 2–3 d |
+| Audio channel (shm + events + ring) | 2–3 d |
+| `SandboxedProcessor` glue inside the addon | 2 d |
+| Detection list + denylist promotion | 1 d |
+| Editor reparenting into Electron | 2–4 d (focus + DPI is fiddly) |
+| Crash detection + restart + state cache | 2 d |
+| QA pass on the top-10 NI plugins + iterating on weird behaviours | 3–5 d |
+| **Total** | **~15–22 working days** |
+
+Roughly 3–4 calendar weeks, in line with the diag report's original estimate, with
+none of it spent fighting Qt.
+
+## 11. POSIX backend (macOS / Linux) — IPC foundation
+
+Tracked by issue #264 (macOS port). The IPC layer is split into a platform-neutral
+core (`*_shared.cpp`: the lock-free ring algorithm, the request/reply/dispatch loop)
+plus per-OS backends (`*_win.cpp` / `*_posix.cpp`) selected in CMake, with the private
+`Impl` struct in `*Impl.h`. The Win32 primitives map to POSIX as follows — the choices
+are driven by what is simultaneously *implemented on macOS*, *crash-safe*, and *tolerant
+of coalesced wakeups*:
+
+| Win32 | POSIX | Why |
+|---|---|---|
+| Named pipe + overlapped I/O + `WaitForMultipleObjects(io, stopEvent)` | `socketpair(AF_UNIX, SOCK_STREAM)` + `poll()` + self-pipe stop | UDS has identical stream/partial-read semantics, so the `[u32-LE][body]` framing carries over unchanged; the self-pipe is the manual-reset stopEvent (one never-drained byte). fd-passed, not named → dodges the macOS `sun_path` 104-char limit and leaves no socket file to leak. |
+| Named file-mapping shm (`CreateFileMappingW` + name) | `shm_open(O_CREAT\|O_EXCL)` + `ftruncate` + **immediate `shm_unlink`**, fd-passed | Anonymous after unlink (fd keeps it alive) → no `/dev/shm` leak on crash, and the macOS 31-char shm-name limit is irrelevant past creation. `fstat().st_size` replaces `VirtualQuery` for the size-bounds check. |
+| Named auto-reset events (`CreateEventW`/`SetEvent`/`WaitForSingleObject`) | **socketpair doorbell** (write 1 byte = signal; `poll` + drain = wait) | The *only* cross-process option that is (a) implemented on macOS — `sem_init` is ENOSYS there; (b) crash-safe — a process-shared pthread mutex has no robust-mutex support on macOS, so a producer crash would deadlock the consumer, whereas a dead socketpair peer surfaces as `POLLHUP`; (c) tolerant of coalesced signals — the ring consumers re-read the atomic index on wake exactly as on the Win32 auto-reset path. |
+| `CreateProcessW`, `bInheritHandles=FALSE` | `posix_spawn` + `POSIX_SPAWN_CLOEXEC_DEFAULT` + `file_actions_adddup2` | `posix_spawn` (never a bare fork — the host has touched CoreAudio/Obj-C and fork-without-exec aborts in CF). `CLOEXEC_DEFAULT` (macOS) is the analog of `bInheritHandles=FALSE`: only the dup2()'d channel/doorbell/shm fds reach the child. Linux lacks the flag; the host keeps its fds CLOEXEC instead. |
+| `WaitForSingleObject(hProcess)` watcher | blocking `waitpid` in a thread | No global SIGCHLD handler (it would fight libuv's child reaping inside Electron); ECHILD (someone else reaped) is tolerated. `kqueue`/`EVFILT_PROC` is the documented fallback if ECHILD proves common. |
+| `PostThreadMessageW(WM_QUIT)` → `TerminateProcess` | `shutdown` control op → `SIGTERM` → `SIGKILL` | |
+
+Trap handled in slice 1: writing to a socket whose peer has closed raises **SIGPIPE**
+(kills the process by default) where Windows merely returns an error — every send uses
+`MSG_NOSIGNAL` (Linux) and the fd carries `SO_NOSIGPIPE` (macOS), so a dead peer surfaces
+as `EPIPE`, never a signal.
+
+The POSIX backends compile on both macOS and Linux (shared primitives) and are verified
+by `tests/sandbox/` — an in-process audio-ring loopback (incl. a contended threaded
+producer/consumer over the doorbell), an in-process control-channel loopback, a real
+`posix_spawn` smoke test (handshake, fd inheritance, clean exit, crash detection, SIGPIPE
+suppression), and a full **end-to-end** harness (`tests/sandbox/e2e/`) that spawns the
+real `slopsmith-vst-host`, loads a passthrough VST3, and round-trips paced audio over the
+shm ring with state + clean shutdown. The unit tests run plain + ASan + TSan and the e2e
+runs on `ubuntu-22.04` + `macos-14` in `.github/workflows/sandbox.yml`; the TSan run on the
+threaded audio loopback validates the release/acquire ring ordering on arm64.
+
+Runtime wiring: `SandboxFactory_posix` + `SandboxedProcessor` are compiled into
+`slopsmith_audio.node` on macOS/Linux, and `slopsmith-vst-host` is built by the same
+cmake-js invocation + co-located with the addon (and bundled via `package.json`), so VST3
+plugins route through the sandbox on all three platforms.
+
+A subtlety the e2e surfaced: `signalSandboxWake()` must wake the sandbox's *own* audio
+worker, but a write to the bidirectional doorbell socketpair goes to the *peer*. The POSIX
+backend uses a dedicated per-side self-wake pipe for it (`waitEvent` polls the socketpair
+*and* the self-pipe); Windows is unaffected (separate auto-reset events per direction).
+
+Editor (Slice 3): the sandbox child owns a floating top-level editor window (Reaper-style —
+the host never reparents it, it only tracks the open/closed bit). On macOS the child calls
+`juce::Process::makeForegroundProcess()` before showing the window so a `posix_spawn`'d
+executable (default background activation policy) can show + focus its `NSWindow`; NodeAddon's
+editor open/close IPC paths are widened from `#if JUCE_WINDOWS` to all platforms. The
+open/close protocol is asserted by the e2e on macOS + Linux CI; visual focus/DPI is the
+irreducible headless blind spot (manual on real hardware).
+
+**Linux** (issue #265) hosts the editor on the same top-level-window model via JUCE 8's VST3
+editor hosting (`Steinberg::Linux::IRunLoop` integrated with the child's `MessageManager` X11
+event loop); `getWindowHandle()` returns the X11 `Window`. One Linux-specific gotcha: JUCE only
+installs its non-fatal X11 error handlers (and calls `XInitThreads`) for *standalone
+JUCEApplications* — `XWindowSystem`'s ctor gates both on `isStandaloneApp()`. This sandbox
+child is not a `JUCEApplication` (bare `main()` + `ScopedJuceInitialiser_GUI`), so Xlib's
+DEFAULT handler stays active and `exit()`s the child on any protocol error — e.g. a benign
+`BadAtom` from JUCE querying `_NET_WM_STATE` on a window-manager-less server. The child
+therefore installs its own non-fatal handler at startup (`installLinuxX11Safety` in
+`src/vst-host/main.cpp`), mirroring the SIGPIPE suppression and the `createEditor` exception
+containment elsewhere. `slopsmith-vst-host` now link-time depends on `libX11` for those direct
+`XInitThreads`/`XSetErrorHandler` calls (JUCE otherwise `dlopen`s it). Verified on the e2e
+across bare Xvfb (CI), and manually on KWin/Xwayland; a non-EWMH WM (twm) fails the editor open
+*cleanly* (10s reply timeout, no crash) rather than hanging the audio path. True cross-process
+embedding (CARemoteLayer / Mach-port on macOS, XEmbed on Linux) remains future work.
+
+Orphan cleanup (Linux): a crashed host already triggers child teardown via the control-socket
+disconnect callback, but that runs on the message thread (`callAsync`) — which a wedged plugin
+(the sandbox's raison d'être) can block. As a kernel-level backstop the child sets
+`prctl(PR_SET_PDEATHSIG, SIGTERM)` at startup (`installLinuxParentDeathSignal`), so the OS
+reaps it on host death regardless of wedged threads. Covered by the `sandbox_e2e_leak` test
+(`tests/sandbox/e2e/leak_test.sh`): the driver crashes without a clean shutdown and asserts the
+child is gone. macOS equivalent (kqueue `EVFILT_PROC`) is future work.
+
+Packaging (Linux): electron-builder's `linux.files` + `linux.asarUnpack` ship `slopsmith-vst-host`
+into the **same** `app.asar.unpacked/build/Release/` directory as `slopsmith_audio.node`, so
+`resolveSandboxExe()` (dladdr on the addon → parent dir → `slopsmith-vst-host`) resolves in both
+AppImage and `.deb`. The exec bit survives the unpack, and the editor's X libraries (libX11 plus
+the libXext/libXrandr/libXcursor/… JUCE `dlopen`s) are a subset of Electron/Chromium's own runtime
+deps, so no extra `deb.depends` is required. Verified with an `electron-builder --linux dir` pack:
+the e2e drives the *packaged* host binary end-to-end (spawn → audio → state → editor → shutdown).
