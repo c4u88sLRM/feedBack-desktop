@@ -107,8 +107,10 @@ clone_slopsmith() {
 	# builds and the push/tag CI paths behave exactly as before.
 	# --branch accepts either a branch or a tag, both shallow-cloneable.
 	local slopsmith_ref="${SLOPSMITH_REF:-main}"
+	local _auth=""
+	[[ -n "${GH_CLONE_TOKEN:-}" ]] && _auth="x-access-token:${GH_CLONE_TOKEN}@"
 	echo "Cloning Slopsmith repository (ref: ${slopsmith_ref})..."
-	git clone --depth 1 --branch "$slopsmith_ref" https://github.com/slopsmith/slopsmith.git "$clone_dir"
+	git clone --depth 1 --branch "$slopsmith_ref" "https://${_auth}github.com/got-feedback/feedback.git" "$clone_dir"
 
 	# Remove broken symlinks from plugins dir
 	find "$clone_dir/plugins" -maxdepth 1 -type l -delete 2>/dev/null || true
@@ -124,47 +126,41 @@ clone_slopsmith() {
 	# plugin work in a feature-branch test build).
 	cd "$clone_dir/plugins"
 	local plugins=(
-		# byrongamatos plugins
-		slopsmith/slopsmith-plugin-drum-highway-3d
-		slopsmith/slopsmith-plugin-drums
-		slopsmith/slopsmith-plugin-editor
-		slopsmith/slopsmith-plugin-flappy-bend
-		slopsmith/slopsmith-plugin-fretboard
-		slopsmith/slopsmith-plugin-jumpingtab
-		slopsmith/slopsmith-plugin-keys-highway-3d
-		slopsmith/slopsmith-plugin-lyrics-karaoke
-		slopsmith/slopsmith-plugin-metronome
-		slopsmith/slopsmith-plugin-midi
-		slopsmith/slopsmith-plugin-multiplayer
-		slopsmith/slopsmith-plugin-musicxml-import
-		slopsmith/slopsmith-plugin-nam-tone
-		slopsmith/slopsmith-plugin-notedetect
-		slopsmith/slopsmith-plugin-piano
-		slopsmith/slopsmith-plugin-practice
-		slopsmith/slopsmith-plugin-profileimport
-		slopsmith/slopsmith-plugin-sectionmap
-		slopsmith/slopsmith-plugin-setlist
-		slopsmith/slopsmith-plugin-staffview
-		slopsmith/slopsmith-plugin-stepmode
-		slopsmith/slopsmith-plugin-studio
-		slopsmith/slopsmith-plugin-tabimport
-		slopsmith/slopsmith-plugin-tabview
-		slopsmith/slopsmith-plugin-tones
-		slopsmith/slopsmith-plugin-tutorials
-		# Community plugins
-		alleexx/slopsmith-plugin-transpose-chords
-		ChrisBeWithYou/slopsmith-plugin-slopscale
-		DeathlySin/slopsmith-plugin-song-preview
-		Jafz2001/slopsmith-plugin-nam-rig-builder
-		masc0t/slopsmith-plugin-find-more
-		masc0t/slopsmith-plugin-invert-highway
-		masc0t/slopsmith-plugin-themes
-		masc0t/slopsmith-update-manager:update_manager
-		slopsmith/slopsmith-plugin-stem-mixer
-		topkoa/slopsmith-plugin-guitar-theory
-		topkoa/slopsmith-plugin-sloppak-converter
-		topkoa/slopsmith-plugin-splitscreen
-		topkoa/slopsmith-plugin-stems
+		# Bundled plugins — all under the got-feedback org after the migration.
+		got-feedback/feedback-plugin-drum-highway-3d
+		got-feedback/feedback-plugin-drums
+		got-feedback/feedback-plugin-editor
+		got-feedback/feedback-plugin-find-more
+		got-feedback/feedback-plugin-flappy-bend
+		got-feedback/feedback-plugin-fretboard
+		got-feedback/feedback-plugin-guitar-theory
+		got-feedback/feedback-plugin-invert-highway
+		got-feedback/feedback-plugin-jumpingtab
+		got-feedback/feedback-plugin-keys-highway-3d
+		got-feedback/feedback-plugin-lyrics-karaoke
+		got-feedback/feedback-plugin-metronome
+		got-feedback/feedback-plugin-midi
+		got-feedback/feedback-plugin-multiplayer
+		got-feedback/feedback-plugin-musicxml-import
+		got-feedback/feedback-plugin-nam-tone
+		got-feedback/feedback-plugin-notedetect
+		got-feedback/feedback-plugin-piano
+		got-feedback/feedback-plugin-practice
+		got-feedback/feedback-plugin-sectionmap
+		got-feedback/feedback-plugin-setlist
+		got-feedback/feedback-plugin-slopscale-fork
+		got-feedback/feedback-plugin-song-preview
+		got-feedback/feedback-plugin-splitscreen
+		got-feedback/feedback-plugin-staffview
+		got-feedback/feedback-plugin-stem-mixer
+		got-feedback/feedback-plugin-stems
+		got-feedback/feedback-plugin-stepmode
+		got-feedback/feedback-plugin-studio
+		got-feedback/feedback-plugin-tabview
+		got-feedback/feedback-plugin-themes
+		got-feedback/feedback-plugin-transpose-chords
+		got-feedback/feedback-plugin-tutorials
+		got-feedback/feedback-plugin-update-manager
 	)
 
 	local total=0
@@ -186,12 +182,12 @@ clone_slopsmith() {
 		fi
 		if [[ -z "$dirname" ]]; then
 			dirname="${owner_repo##*/}"
-			dirname="${dirname#slopsmith-plugin-}"
+			dirname="${dirname#feedback-plugin-}"
 			dirname="${dirname//-/_}"
 		fi
 		local clone_args=(--depth 1)
 		[[ -n "$branch" ]] && clone_args+=(--branch "$branch")
-		if git clone "${clone_args[@]}" "https://github.com/${owner_repo}.git" "$dirname" 2>/dev/null; then
+		if git clone "${clone_args[@]}" "https://${_auth}github.com/${owner_repo}.git" "$dirname" 2>/dev/null; then
 			cloned=$((cloned + 1))
 		else
 			echo " skipped ${owner_repo}${branch:+@$branch}"

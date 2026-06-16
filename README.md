@@ -1,11 +1,11 @@
 # Slopsmith Desktop
 
-Standalone cross-platform desktop app that wraps [Slopsmith](https://github.com/slopsmith/slopsmith) with integrated VST hosting, amp modeling, audio I/O, and full plugin support.
+Standalone cross-platform desktop app that wraps [Slopsmith](https://github.com/got-feedback/feedback) with integrated VST hosting, amp modeling, audio I/O, and full plugin support.
 
 ## Install
 
 Prebuilt installers for the latest tagged release are published on the
-[GitHub Releases page](https://github.com/slopsmith/slopsmith-desktop/releases/latest).
+[GitHub Releases page](https://github.com/got-feedback/feedback-desktop/releases/latest).
 
 | Platform | Download | Notes |
 |----------|----------|-------|

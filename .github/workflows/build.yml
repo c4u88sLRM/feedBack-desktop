@@ -147,6 +147,9 @@ jobs:
           # historical default-branch behaviour. clone_slopsmith() in
           # build-common.sh also defaults to main as a second safety net.
           SLOPSMITH_REF: ${{ inputs.slopsmith_ref || 'main' }}
+          # PAT with read access to the private got-feedback repos so
+          # build-common.sh can clone core + the bundled plugins.
+          GH_CLONE_TOKEN: ${{ secrets.SLOPSMITH_SYNC_TOKEN }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
@@ -557,7 +560,7 @@ jobs:
             echo "::error::SLOPSMITH_SYNC_TOKEN secret is missing; cannot dispatch."
             exit 1
           fi
-          gh api -X POST repos/slopsmith/slopsmith/dispatches \
+          gh api -X POST repos/got-feedback/feedback/dispatches \
             -f event_type=desktop-released \
             -f "client_payload[version]=$version"
           echo "Dispatched desktop-released event (version=$version) to slopsmith."

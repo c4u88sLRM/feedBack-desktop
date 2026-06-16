@@ -42,10 +42,12 @@ jobs:
 
     steps:
       - name: Clone core at active branch
+        env:
+          GH_CLONE_TOKEN: ${{ secrets.SLOPSMITH_SYNC_TOKEN }}
         run: |
           git clone --depth 1 --branch "${{ needs.setup.outputs.branch }}" \
-            https://github.com/slopsmith/slopsmith.git core
-          echo "Cloned slopsmith @ $(git -C core rev-parse --short HEAD) (${{ needs.setup.outputs.branch }})"
+            "https://x-access-token:${GH_CLONE_TOKEN}@github.com/got-feedback/feedback.git" core
+          echo "Cloned feedback core @ $(git -C core rev-parse --short HEAD) (${{ needs.setup.outputs.branch }})"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -64,8 +66,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/slopsmith/slopsmith:nightly
-            ghcr.io/slopsmith/slopsmith:nightly-${{ needs.setup.outputs.date }}
+            ghcr.io/got-feedback/feedback:nightly
+            ghcr.io/got-feedback/feedback:nightly-${{ needs.setup.outputs.date }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -145,6 +147,9 @@ jobs:
         run: ./scripts/build-release.sh
         shell: bash
         env:
+          # PAT with read access to the private got-feedback repos so
+          # build-common.sh can clone core + the bundled plugins.
+          GH_CLONE_TOKEN: ${{ secrets.SLOPSMITH_SYNC_TOKEN }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           # No notarization for nightlies — testers use xattr -dr com.apple.quarantine
           CSC_FOR_PULL_REQUEST: "true"
