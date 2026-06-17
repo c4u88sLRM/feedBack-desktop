@@ -137,6 +137,7 @@ clone_slopsmith() {
 		got-feedback/feedback-plugin-invert-highway
 		got-feedback/feedback-plugin-jumpingtab
 		got-feedback/feedback-plugin-keys-highway-3d
+		got-feedback/feedback-plugin-loosefolder:loose_folder
 		got-feedback/feedback-plugin-lyrics-karaoke
 		got-feedback/feedback-plugin-metronome
 		got-feedback/feedback-plugin-midi
@@ -155,6 +156,7 @@ clone_slopsmith() {
 		got-feedback/feedback-plugin-stem-mixer
 		got-feedback/feedback-plugin-stems
 		got-feedback/feedback-plugin-stepmode
+		got-feedback/feedback-plugin-strum-fighter
 		got-feedback/feedback-plugin-studio
 		got-feedback/feedback-plugin-tabview
 		got-feedback/feedback-plugin-themes
