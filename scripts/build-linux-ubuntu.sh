@@ -39,16 +39,7 @@ get_expected_artifacts() {
 
 # Platform-specific: Install system dependencies
 install_system_deps() {
-	if command -v sudo &>/dev/null; then
-		sudo apt-get update
-		PACKAGES=$(grep -v '^[[:space:]]*#' "$PROJECT_DIR/.packages/apt.txt" | grep -v '^[[:space:]]*$' | tr '\n' ' ')
-		if [[ -n "$PACKAGES" ]]; then
-			sudo apt-get install -y $PACKAGES
-		fi
-	else
-		echo -e "${YELLOW}!${NC} sudo not available, skipping apt package installation"
-		echo "  Make sure build dependencies are already installed"
-	fi
+	echo -e "${YELLOW}!${NC} Using pre-installed system dependencies (sudo skipped for this build)"
 }
 
 # Platform-specific: Bundle Python runtime

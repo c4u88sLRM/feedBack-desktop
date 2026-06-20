@@ -85,11 +85,14 @@ fi
 # at runtime on user machines. The lib/sloppak_convert.py fallback to
 # the built-in `vorbis -strict experimental` encoder is a safety net for
 # unbundled installs, not a license to ship a libvorbis-less binary.
-if ! "$BIN_DIR/ffmpeg" -hide_banner -encoders 2>/dev/null | grep -wq libvorbis; then
+"$BIN_DIR/ffmpeg" -hide_banner -encoders >/tmp/ffmpeg_enc_check 2>/dev/null
+if ! grep -wq libvorbis /tmp/ffmpeg_enc_check; then
     echo "ERROR: bundled ffmpeg lacks libvorbis encoder. Sloppak conversion would fall back to the lower-quality built-in vorbis encoder on user machines." >&2
     echo "Install an ffmpeg built with --enable-libvorbis (apt's ffmpeg ships it by default; check your distro's package if this fails)." >&2
+    rm -f /tmp/ffmpeg_enc_check
     exit 1
 fi
+rm -f /tmp/ffmpeg_enc_check
 
 bundle_with_deps "$BIN_DIR/ffmpeg"
 

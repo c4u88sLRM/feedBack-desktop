@@ -110,7 +110,7 @@ clone_slopsmith() {
 	local _auth=""
 	[[ -n "${GH_CLONE_TOKEN:-}" ]] && _auth="x-access-token:${GH_CLONE_TOKEN}@"
 	echo "Cloning Slopsmith repository (ref: ${slopsmith_ref})..."
-	git clone --depth 1 --branch "$slopsmith_ref" "https://${_auth}github.com/got-feedback/feedback.git" "$clone_dir"
+	git clone --depth 1 --branch "$slopsmith_ref" "https://${_auth}github.com/got-feedback/feedBack.git" "$clone_dir"
 
 	# Remove broken symlinks from plugins dir
 	find "$clone_dir/plugins" -maxdepth 1 -type l -delete 2>/dev/null || true
@@ -127,42 +127,42 @@ clone_slopsmith() {
 	cd "$clone_dir/plugins"
 	local plugins=(
 		# Bundled plugins — all under the got-feedback org after the migration.
-		got-feedback/feedback-plugin-drum-highway-3d
-		got-feedback/feedback-plugin-drums
-		got-feedback/feedback-plugin-editor
-		got-feedback/feedback-plugin-find-more
-		got-feedback/feedback-plugin-flappy-bend
-		got-feedback/feedback-plugin-fretboard
-		got-feedback/feedback-plugin-guitar-theory
-		got-feedback/feedback-plugin-invert-highway
-		got-feedback/feedback-plugin-jumpingtab
-		got-feedback/feedback-plugin-keys-highway-3d
-		got-feedback/feedback-plugin-loosefolder:loose_folder
-		got-feedback/feedback-plugin-lyrics-karaoke
-		got-feedback/feedback-plugin-metronome
-		got-feedback/feedback-plugin-midi
-		got-feedback/feedback-plugin-multiplayer
-		got-feedback/feedback-plugin-musicxml-import
-		got-feedback/feedback-plugin-nam-tone
-		got-feedback/feedback-plugin-notedetect
-		got-feedback/feedback-plugin-piano
-		got-feedback/feedback-plugin-practice
-		got-feedback/feedback-plugin-sectionmap
-		got-feedback/feedback-plugin-setlist
-		got-feedback/feedback-plugin-slopscale-fork
-		got-feedback/feedback-plugin-song-preview
-		got-feedback/feedback-plugin-splitscreen
-		got-feedback/feedback-plugin-staffview
-		got-feedback/feedback-plugin-stem-mixer
-		got-feedback/feedback-plugin-stems
-		got-feedback/feedback-plugin-stepmode
-		got-feedback/feedback-plugin-strum-fighter
-		got-feedback/feedback-plugin-studio
-		got-feedback/feedback-plugin-tabview
-		got-feedback/feedback-plugin-themes
-		got-feedback/feedback-plugin-transpose-chords
-		got-feedback/feedback-plugin-tutorials
-		got-feedback/feedback-plugin-update-manager
+		got-feedback/feedBack-plugin-drum-highway-3d
+		got-feedback/feedBack-plugin-drums
+		got-feedback/feedBack-plugin-editor
+		got-feedback/feedBack-plugin-find-more
+		got-feedback/feedBack-plugin-flappy-bend
+		got-feedback/feedBack-plugin-fretboard
+		got-feedback/feedBack-plugin-guitar-theory
+		got-feedback/feedBack-plugin-invert-highway
+		got-feedback/feedBack-plugin-jumpingtab
+		got-feedback/feedBack-plugin-keys-highway-3d
+		got-feedback/feedBack-plugin-loosefolder:loose_folder
+		got-feedback/feedBack-plugin-lyrics-karaoke
+		got-feedback/feedBack-plugin-metronome
+		got-feedback/feedBack-plugin-midi
+		got-feedback/feedBack-plugin-multiplayer
+		got-feedback/feedBack-plugin-musicxml-import
+		got-feedback/feedBack-plugin-nam-tone
+		got-feedback/feedBack-plugin-notedetect
+		got-feedback/feedBack-plugin-piano
+		got-feedback/feedBack-plugin-practice
+		got-feedback/feedBack-plugin-sectionmap
+		got-feedback/feedBack-plugin-setlist
+		got-feedback/feedBack-plugin-slopscale-fork
+		got-feedback/feedBack-plugin-song-preview
+		got-feedback/feedBack-plugin-splitscreen
+		got-feedback/feedBack-plugin-staffview
+		got-feedback/feedBack-plugin-stem-mixer
+		got-feedback/feedBack-plugin-stems
+		got-feedback/feedBack-plugin-stepmode
+		got-feedback/feedBack-plugin-strum-fighter
+		got-feedback/feedBack-plugin-studio
+		got-feedback/feedBack-plugin-tabview
+		got-feedback/feedBack-plugin-themes
+		got-feedback/feedBack-plugin-transpose-chords
+		got-feedback/feedBack-plugin-tutorials
+		got-feedback/feedBack-plugin-update-manager
 	)
 
 	local total=0
