@@ -1,6 +1,6 @@
 // Preload script — exposes safe APIs to the Slopsmith webview.
 // The existing Slopsmith frontend runs unchanged; this adds
-// window.slopsmithDesktop for audio engine and desktop features.
+// window.feedBackDesktop for audio engine and desktop features.
 
 const { contextBridge, ipcRenderer } = require('electron');
 import type { StartupStatus } from './python';
@@ -190,7 +190,7 @@ const isMainFrame = (() => {
     try { return w === w.top; } catch { return false; }
 })();
 
-const slopsmithDesktopApi = {
+const feedBackDesktopApi = {
     // Platform detection
     isDesktop: true,
     platform: process.platform,
@@ -533,7 +533,13 @@ const slopsmithDesktopApi = {
 };
 
 if (isMainFrame) {
-    contextBridge.exposeInMainWorld('slopsmithDesktop', slopsmithDesktopApi);
+    contextBridge.exposeInMainWorld('feedBackDesktop', feedBackDesktopApi);
+    // Legacy alias — plugins and external/community code built against the
+    // pre-rename bridge still read window.slopsmithDesktop. Expose the same
+    // object under the old name so they keep working after the rename
+    // (got-feedback/feedBack-desktop#40). Same isMainFrame gating, so an
+    // allow-listed embed frame still gets no desktop surface under either name.
+    contextBridge.exposeInMainWorld('slopsmithDesktop', feedBackDesktopApi);
 }
 
 export {};
