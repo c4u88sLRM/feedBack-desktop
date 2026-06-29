@@ -292,16 +292,50 @@ window.__feedBackDesktopAudioHooks = window.__feedBackDesktopAudioHooks || {};
 
     async function audioInputOpenHandler(request) {
         const source = (request && request.logicalSourceKey) ? String(request.logicalSourceKey) : '';
-        const match = /^desktop-audio:([^:]+):input:(\d+)$/.exec(source);
-        const inputType = match ? match[1] : safeKeyPart(deviceTypeSelect?.value || 'default');
-        const inputIndex = match ? Number(match[2]) : -1;
+        // A named device carries a STABLE name-encoded key so the selection
+        // survives device reorder/hotplug (virtual/aggregate devices like
+        // BlackHole reorder on enumeration). A legacy `:input:<N>` key — emitted
+        // by older builds and any selection persisted before this change — still
+        // resolves positionally for one more open.
+        const nameMatch = /^desktop-audio:([^:]+):input:name:(.+)$/.exec(source);
+        const indexMatch = nameMatch ? null : /^desktop-audio:([^:]+):input:(\d+)$/.exec(source);
+        const inputType = nameMatch ? nameMatch[1]
+            : indexMatch ? indexMatch[1]
+            : safeKeyPart(deviceTypeSelect?.value || 'default');
         const typeInfo = currentDeviceTypes.find(t => safeKeyPart(t && t.name) === inputType)
             || currentDeviceTypes.find(t => t && t.name === deviceTypeSelect?.value)
             || currentDeviceTypes[0]
             || null;
-        const inputDevice = inputIndex >= 0 && typeInfo && Array.isArray(typeInfo.inputs)
-            ? (typeInfo.inputs[inputIndex] || '')
-            : (inputDeviceSelect?.value || '');
+        const typeInputs = typeInfo && Array.isArray(typeInfo.inputs) ? typeInfo.inputs : [];
+
+        // Resolve the picked device to a concrete name and FAIL LOUD when it's
+        // gone. The old code fell through to '' (or whatever the Settings
+        // dropdown showed), which makes the native engine open its DEFAULT device
+        // — the internal mic. That silent substitution is the macOS wrong-mic bug
+        // this handler exists to kill: the user picks BlackHole, setup "succeeds",
+        // and every score is garbage with no signal anything went wrong.
+        let inputDevice = '';
+        if (nameMatch) {
+            let decoded = '';
+            try { decoded = decodeURIComponent(nameMatch[2]); } catch (_) { decoded = ''; }
+            // The key encodes the trimmed name; match trim-tolerantly but bind the
+            // engine's exact enumerated string.
+            inputDevice = typeInputs.find(n => String(n).trim() === decoded) || '';
+            if (!inputDevice) {
+                return { outcome: 'failed', status: 'failed', reason: `Selected input device "${decoded || '(unknown)'}" is no longer available` };
+            }
+        } else if (indexMatch) {
+            const idx = Number(indexMatch[2]);
+            inputDevice = (idx >= 0 && idx < typeInputs.length) ? typeInputs[idx] : '';
+            if (!inputDevice) {
+                return { outcome: 'failed', status: 'failed', reason: 'Selected input device is no longer available' };
+            }
+        } else {
+            // No recognizable source key — refuse rather than silently grabbing
+            // whatever the Settings dropdown happens to show (another default path).
+            return { outcome: 'failed', status: 'failed', reason: 'No input device selected' };
+        }
+
         const snapshot = currentAudioDeviceSnapshot();
         const result = await api.setDevice({
             inputType: typeInfo && typeInfo.name ? typeInfo.name : snapshot.inputType,
@@ -314,7 +348,23 @@ window.__feedBackDesktopAudioHooks = window.__feedBackDesktopAudioHooks || {};
         const ok = typeof result === 'boolean' ? result : !!result?.ok;
         if (!ok) return { outcome: 'failed', status: 'failed', reason: result && result.error ? String(result.error) : 'Native audio device open failed' };
         if (typeof api.startAudio === 'function') await api.startAudio();
-        return { outcome: 'handled', status: 'open' };
+
+        // Read back what the engine ACTUALLY bound, so callers (input_setup's
+        // confirmation gate, note_detect) can surface "Now listening to: <device>"
+        // and spot a silent mismatch instead of trusting the request blind.
+        let boundType = (typeInfo && typeInfo.name) ? String(typeInfo.name) : '';
+        let boundName = inputDevice;
+        try {
+            if (typeof api.getCurrentDevice === 'function') {
+                const cur = await api.getCurrentDevice();
+                if (cur && typeof cur === 'object') {
+                    if (cur.inputType) boundType = String(cur.inputType);
+                    if (cur.input) boundName = String(cur.input);
+                }
+            }
+        } catch (_) { /* fall back to the requested identity */ }
+
+        return { outcome: 'handled', status: 'open', payload: { boundType, boundName, requestedName: inputDevice } };
     }
 
     async function audioInputCloseHandler() {
@@ -342,11 +392,21 @@ window.__feedBackDesktopAudioHooks = window.__feedBackDesktopAudioHooks || {};
             const driverSuffix = (showDriverType && typeName) ? ` (${typeName})` : '';
             const inputs = Array.isArray(typeInfo && typeInfo.inputs) ? typeInfo.inputs : [];
             inputs.forEach((deviceName, index) => {
-                const logicalSourceKey = `desktop-audio:${safeKeyPart(typeName)}:input:${index}`;
                 const hasRealName = (typeof deviceName === 'string' && !!deviceName.trim());
                 const realName = hasRealName
                     ? deviceName.trim()
                     : `Desktop input ${index + 1}`;
+                // Identity in the key: a named device gets a STABLE name-encoded
+                // key so selection survives device reorder/hotplug (encodeURIComponent
+                // escapes ':' to %3A so it can't break the handler's parser). Only a
+                // truly nameless input falls back to the positional index, where the
+                // index is the only identity available. NOTE: selections persisted by
+                // an older build use the legacy index key; the open handler still
+                // resolves those positionally, but the picker now lists this device
+                // under its name key, so a returning user re-picks once.
+                const logicalSourceKey = hasRealName
+                    ? `desktop-audio:${safeKeyPart(typeName)}:input:name:${encodeURIComponent(realName)}`
+                    : `desktop-audio:${safeKeyPart(typeName)}:input:${index}`;
                 audioSession.registerInputSource({
                     sourceId: `audio_engine:${logicalSourceKey}`,
                     logicalSourceKey,
