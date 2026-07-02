@@ -52,6 +52,27 @@ public:
                      const juce::String& name,
                      const juce::String& path);
     void removeProcessor(int slotId);
+    // Swap the processor in an existing slot IN PLACE — same slotId, position,
+    // name, path, type and routing are preserved; only the underlying processor
+    // changes. Used to promote an in-process VST3 to the out-of-process sandbox
+    // when its editor is opened (an in-process editor is the Windows WndProc/Qt
+    // crash path). Prepares the incoming processor under the SEH guard, then
+    // swaps under the audio lock; the old processor is torn down off the lock.
+    // Returns false if the slot is gone or the incoming processor faulted in
+    // prepareToPlay (in which case the existing processor is left untouched).
+    bool replaceProcessor(int slotId, std::unique_ptr<juce::AudioProcessor> processor);
+    // Snapshot a slot's state for sandbox promotion, SAFELY. Runs hasEditor()
+    // and getStateInformation() under the audio lock (so they can't race
+    // process()'s processBlock on the same instance) and under the SEH/signal
+    // guard (so a plugin that faults during the snapshot is contained +
+    // blocklisted, not fatal — an unguarded getStateInformation on the very
+    // plugins this promotion targets would reintroduce the editor crash on the
+    // message thread). Returns true and fills `state` only for a non-sandboxed
+    // in-process VST3 slot that actually has an editor; returns false (leaving
+    // `state` empty) for a missing/non-VST/editor-less/already-sandboxed slot or
+    // if the guarded calls faulted (processor released). A false result means
+    // "not promotable" — the caller may safely open the editor in-process.
+    bool captureVstStateForPromotion(int slotId, juce::MemoryBlock& state);
     void moveProcessor(int fromIndex, int toIndex);
     void setBypass(int slotId, bool bypassed);
     void setMultiBypass(const juce::Array<std::pair<int, bool>>& changes);
@@ -66,6 +87,10 @@ public:
     int getNumSlots() const;
     const ProcessorSlot* getSlot(int slotId) const;
     juce::Array<const ProcessorSlot*> getAllSlots() const;
+    // Current prepared playback format — used to prepare a processor that is
+    // swapped in mid-session (replaceProcessor) at the same rate as the chain.
+    double getCurrentSampleRate() const { return currentSampleRate; }
+    int getCurrentBlockSize() const { return currentBlockSize; }
 
     // Parameters for a specific slot
     struct ParamInfo
