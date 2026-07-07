@@ -37,7 +37,7 @@ jobs:
             arch: x64
           - os: macos-14
             platform: mac
-            arch: arm64
+            arch: universal
           - os: windows-latest
             platform: win
             arch: x64
@@ -201,9 +201,9 @@ jobs:
             exit 1
           fi
           name=$(basename "$app" .app)
-          ditto -c -k --sequesterRsrc --keepParent "$app" "release/${name}-macos-arm64.zip"
-          echo "Zipped $app -> release/${name}-macos-arm64.zip"
-          ls -lh "release/${name}-macos-arm64.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "release/${name}-macos-universal.zip"
+          echo "Zipped $app -> release/${name}-macos-universal.zip"
+          ls -lh "release/${name}-macos-universal.zip"
 
       # Velopack: derive update channel from tag name. Only runs for
       # tag pushes (refs/tags/v*) on win + mac — Linux still ships via
@@ -384,7 +384,7 @@ jobs:
       # path ending in .app as a prebuilt bundle. A non-.app folder
       # would instead trigger auto-bundle mode (which also needs
       # --icon). electron-builder's "dir" target writes the bundle to
-      # release/mac-arm64/<productName>.app on the arm64 runner.
+      # release/mac*/<productName>.app on the macOS runner.
       - name: Velopack pack (macOS)
         if: matrix.platform == 'mac' && steps.velopack_channel.outputs.channel != ''
         shell: bash
@@ -403,9 +403,9 @@ jobs:
           # (e.g. fee[dB]ack.app), not the packId — resolve them dynamically
           # so a rebrand can't break the pack (Velopack otherwise looks for
           # <packId>.app/Contents/MacOS/<packId> and fails).
-          app=$(ls -d release/mac-arm64/*.app 2>/dev/null | head -n1 || true)
+          app=$(ls -d release/mac*/*.app 2>/dev/null | head -n1 || true)
           if [[ -z "${app:-}" || ! -d "$app" ]]; then
-            echo "::error::No .app bundle in release/mac-arm64/"
+            echo "::error::No .app bundle in release/mac*/"
             exit 1
           fi
           mainexe=$(basename "$app" .app)
@@ -416,7 +416,7 @@ jobs:
             vpk pack \
               --packId feedback \
               --packVersion "${{ steps.velopack_channel.outputs.version }}" \
-              --channel "osx-arm64-${{ steps.velopack_channel.outputs.channel }}" \
+              --channel "osx-universal-${{ steps.velopack_channel.outputs.channel }}" \
               --packDir "$app" \
               --mainExe "$mainexe" \
               -o release/velopack
@@ -439,7 +439,7 @@ jobs:
             vpk pack \
               --packId feedback \
               --packVersion "${{ steps.velopack_channel.outputs.version }}" \
-              --channel "osx-arm64-${{ steps.velopack_channel.outputs.channel }}" \
+              --channel "osx-universal-${{ steps.velopack_channel.outputs.channel }}" \
               --packDir "$app" \
               --mainExe "$mainexe" \
               -o release/velopack \
