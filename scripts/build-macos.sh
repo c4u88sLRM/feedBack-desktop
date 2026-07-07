@@ -11,6 +11,11 @@ CONFIG="$PROJECT_DIR/.build-config.json"
 # Platform identifier
 export PLATFORM="macos"
 
+# Build architecture mode:
+#   native    -> host arch build (default)
+#   universal -> request universal app output and verify fat binary
+MACOS_BUILD_ARCH="${MACOS_BUILD_ARCH:-native}"
+
 # Check we're on macOS
 if [[ "$OSTYPE" != "darwin"* ]]; then
     echo "Error: This script is for macOS only" >&2
@@ -39,6 +44,12 @@ fi
 # electron-builder) can each consume the form they expect.
 if [[ -z "${CSC_NAME:-}" && -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
     export CSC_NAME="${APPLE_SIGNING_IDENTITY#Developer ID Application: }"
+fi
+
+# If universal is requested, pass through extra electron-builder args.
+# build-common.sh ultimately invokes electron-builder and forwards this.
+if [[ "$MACOS_BUILD_ARCH" == "universal" ]]; then
+    export EXTRA_ELECTRON_BUILDER_ARGS="${EXTRA_ELECTRON_BUILDER_ARGS:-} --mac universal"
 fi
 
 # Color setup
@@ -153,7 +164,7 @@ bundle_python_impl() {
 # Platform-specific: Return expected artifact patterns
 get_expected_artifacts() {
     # mac.target is "dir": electron-builder writes the unpacked
-    # <productName>.app to release/mac-arm64/ (no .dmg/.zip). Velopack's
+    # <productName>.app to release/mac*/ (no .dmg/.zip). Velopack's
     # pack step turns that .app into the actual release assets. Glob
     # mac*/*.app so the check matches the productName-derived bundle name
     # (now feedback.app, not the pre-rebrand Slopsmith.app) and also passes
@@ -375,6 +386,27 @@ bundle_binaries_impl() {
 
 # Run the build
 main "$@"
+
+# Hard validation for universal request: fail unless app executable
+# contains both arm64 and x86_64 slices.
+if [[ "$MACOS_BUILD_ARCH" == "universal" ]]; then
+    app="$(ls -d "$PROJECT_DIR"/release/mac*/*.app 2>/dev/null | head -n1 || true)"
+    if [[ -z "${app:-}" || ! -d "$app" ]]; then
+        echo "Error: universal build requested but no .app found under release/mac*/" >&2
+        exit 1
+    fi
+    main_bin="$(find "$app/Contents/MacOS" -type f | head -n1 || true)"
+    if [[ -z "${main_bin:-}" ]]; then
+        echo "Error: could not locate app executable in $app/Contents/MacOS" >&2
+        exit 1
+    fi
+    archs="$(lipo -archs "$main_bin" 2>/dev/null || true)"
+    if [[ "$archs" != *"arm64"* || "$archs" != *"x86_64"* ]]; then
+        echo "Error: app is not universal (expected arm64 + x86_64). got: ${archs:-<none>}" >&2
+        exit 1
+    fi
+    echo "Verified universal app executable: $archs"
+fi
 
 # Post-build: notarize and staple the DMG. electron-builder notarizes
 # and staples the .app, then builds + signs the DMG — but the DMG
