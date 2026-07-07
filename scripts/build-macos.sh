@@ -49,7 +49,7 @@ fi
 # If universal is requested, pass through extra electron-builder args.
 # build-common.sh ultimately invokes electron-builder and forwards this.
 if [[ "$MACOS_BUILD_ARCH" == "universal" ]]; then
-    export EXTRA_ELECTRON_BUILDER_ARGS="${EXTRA_ELECTRON_BUILDER_ARGS:-} --mac universal"
+    export EXTRA_ELECTRON_BUILDER_ARGS="${EXTRA_ELECTRON_BUILDER_ARGS:-} --universal"
 fi
 
 # Color setup
