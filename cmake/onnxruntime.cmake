@@ -44,16 +44,30 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     set(_ort_ext "tgz")
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+
+    # In universal builds CMAKE_OSX_ARCHITECTURES is authoritative.
+    # cmake-js/single-arch builds may only have CMAKE_SYSTEM_PROCESSOR.
+    set(_mac_arches "${CMAKE_OSX_ARCHITECTURES}")
+    if(_mac_arches STREQUAL "")
+        set(_mac_arches "${CMAKE_SYSTEM_PROCESSOR}")
+    endif()
+
+    # Normalize separators for robust matching ("arm64;x86_64", "arm64 x86_64", etc.)
+    string(REPLACE ";" " " _mac_arches_norm "${_mac_arches}")
+
+    # This configure pass must pick ONE prebuilt ORT matching the current slice.
+    # Universal should be built slice-by-slice (arm64 then x64), then lipo merged.
+    if(_mac_arches_norm MATCHES "(^| )arm64($| )|(^| )aarch64($| )")
         set(_ort_asset "onnxruntime-osx-arm64-${ONNXRUNTIME_VERSION}")
         set(_ort_sha "b678fc3c2354c771fea4fba420edeccfba205140088334df801e7fc40e83a57a")
-    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|x64")
+    elseif(_mac_arches_norm MATCHES "(^| )x86_64($| )|(^| )AMD64($| )|(^| )x64($| )")
         set(_ort_asset "onnxruntime-osx-x86_64-${ONNXRUNTIME_VERSION}")
         set(_ort_sha "0f73006813af2a1a5d1723ed7dfb694fc629d15037124081bb61b7bf7d99fc78")
     else()
         set(_ort_ok OFF)
-        message(STATUS "ONNX Runtime: unsupported macOS arch '${CMAKE_SYSTEM_PROCESSOR}' — ML note detection disabled")
+        message(STATUS "ONNX Runtime: unsupported macOS arch set '${_mac_arches}' — ML note detection disabled")
     endif()
+
     set(_ort_import "libonnxruntime.dylib")
     set(_ort_runtime "libonnxruntime.${ONNXRUNTIME_VERSION}.dylib")
     set(_ort_providers "libonnxruntime_providers_shared.dylib")
