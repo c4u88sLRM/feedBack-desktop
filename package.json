@@ -56,10 +56,6 @@
         "to": "THIRD_PARTY_LICENSES.md"
       },
       {
-        "from": "README.md",
-        "to": "README.md"
-      },
-      {
         "from": "resources/slopsmith",
         "to": "slopsmith"
       },
@@ -114,7 +110,7 @@
     "entitlements": "resources/entitlements.mac.plist",
     "entitlementsInherit": "resources/entitlements.mac.plist",
     "notarize": true,
-    "x64ArchFiles": "**/Contents/Resources/bin/ff*",
+    "x64ArchFiles": "**/Contents/Resources/bin/**",
     "extendInfo": {
       "NSMicrophoneUsageDescription": "fee[dB]ack needs microphone access for guitar input and note detection."
     },
