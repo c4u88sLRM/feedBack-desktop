@@ -502,7 +502,16 @@ package_application() {
             exit 1
             ;;
     esac
-    npx electron-builder "$builder_platform" --publish never
+
+    # Allow platform scripts to inject additional electron-builder args
+    # (e.g. macOS universal: --mac universal).
+    local extra_args=()
+    if [[ -n "${EXTRA_ELECTRON_BUILDER_ARGS:-}" ]]; then
+        # shellcheck disable=SC2206
+        extra_args=( ${EXTRA_ELECTRON_BUILDER_ARGS} )
+    fi
+
+    npx electron-builder "$builder_platform" "${extra_args[@]}" --publish never
     echo_summary "Application packaged"
     echo ""
 }
