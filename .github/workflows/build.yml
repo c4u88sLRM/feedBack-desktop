@@ -156,6 +156,7 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          MACOS_BUILD_ARCH: ${{ matrix.platform == 'mac' && 'universal' || '' }}
           # electron-builder defensively skips code signing when the
           # triggering event is `pull_request` ("forks usually don't have
           # signing secrets"). This workflow no longer runs on the
