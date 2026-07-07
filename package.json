@@ -105,28 +105,28 @@
     },
     "mac": {
       "target": [
-        "dir"
-      ],
-      "category": "public.app-category.music",
-      "icon": "resources/icons/icon.icns",
-      "hardenedRuntime": true,
-      "gatekeeperAssess": false,
-      "entitlements": "resources/entitlements.mac.plist",
-      "entitlementsInherit": "resources/entitlements.mac.plist",
-      "notarize": true,
-      "x64ArchFiles": "**/Contents/Resources/bin/ffmpeg",
-      "extendInfo": {
-        "NSMicrophoneUsageDescription": "fee[dB]ack needs microphone access for guitar input and note detection."
-      },
-      "files": [
-        "build/Release/slopsmith-vst-scan",
-        "build/Release/slopsmith-vst-host"
-      ],
-      "asarUnpack": [
-        "build/Release/slopsmith-vst-scan",
-        "build/Release/slopsmith-vst-host"
-      ]
+      "dir"
+    ],
+    "category": "public.app-category.music",
+    "icon": "resources/icons/icon.icns",
+    "hardenedRuntime": true,
+    "gatekeeperAssess": false,
+    "entitlements": "resources/entitlements.mac.plist",
+    "entitlementsInherit": "resources/entitlements.mac.plist",
+    "notarize": true,
+    "x64ArchFiles": "**/Contents/Resources/bin/ffmpeg*",
+    "extendInfo": {
+      "NSMicrophoneUsageDescription": "fee[dB]ack needs microphone access for guitar input and note detection."
     },
+    "files": [
+      "build/Release/slopsmith-vst-scan",
+      "build/Release/slopsmith-vst-host"
+    ],
+    "asarUnpack": [
+      "build/Release/slopsmith-vst-scan",
+      "build/Release/slopsmith-vst-host"
+    ]
+  },
     "win": {
       "target": [
         "dir"
