@@ -110,7 +110,10 @@
     "entitlements": "resources/entitlements.mac.plist",
     "entitlementsInherit": "resources/entitlements.mac.plist",
     "notarize": true,
-    "x64ArchFiles": "**/Contents/Resources/{bin/**,python/runtime/**/*,python/runtime/**/.dylibs/**}",
+    "x64ArchFiles": [
+      "**/Contents/Resources/{bin/**,python/runtime/**/*,python/runtime/**/.dylibs/**}",
+      "**/Contents/Resources/slopsmith/plugins/**/*.vst3/Contents/MacOS/**"
+    ],
     "extendInfo": {
       "NSMicrophoneUsageDescription": "fee[dB]ack needs microphone access for guitar input and note detection."
     },
